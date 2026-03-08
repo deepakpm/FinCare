@@ -1,0 +1,32 @@
+.topbar.minimal-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 40px;
+    background-color: var(--bg-base);
+    border-bottom: 1px solid var(--border-color);
+    z-index: 10;
+}
+
+.minimal-tab {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    font-weight: 500;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s;
+}
+
+.minimal-tab:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-surface-hover);
+}
+
+.minimal-tab.active {
+    color: var(--accent-primary);
+    background-color: rgba(16, 185, 129, 0.1);
+    /* using a slight green tint based on typical accent-primary */
+}

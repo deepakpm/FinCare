@@ -1,0 +1,45 @@
+.merchants-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.merchant-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.merchant-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    background-color: rgba(255, 255, 255, 0.05);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+}
+
+.merchant-info {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+}
+
+.merchant-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+}
+
+.merchant-tx {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.merchant-amount {
+    font-weight: 700;
+    color: var(--text-primary);
+}

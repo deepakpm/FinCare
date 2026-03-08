@@ -1,0 +1,60 @@
+.analytics-view {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.analytics-header h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+}
+
+.analytics-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.full-width-panel {
+    width: 100%;
+}
+
+.analytics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+}
+
+.split-panel {
+    display: flex;
+    flex-direction: column;
+}
+
+.chart-container {
+    width: 100%;
+    margin-top: 16px;
+}
+
+.empty-state {
+    align-items: center;
+    justify-content: center;
+    height: 60vh;
+}
+
+.empty-message {
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.empty-message h3 {
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+@media (max-width: 1024px) {
+    .analytics-grid {
+        grid-template-columns: 1fr;
+    }
+}
