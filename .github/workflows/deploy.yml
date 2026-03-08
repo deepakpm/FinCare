@@ -1,0 +1,269 @@
+##############################################################
+# GitHub Actions — Multi-Cloud Deploy Workflow
+#
+# USAGE: Run manually from GitHub Actions → "Run workflow"
+#   - Choose your cloud provider (aws / gcp / azure / do)
+#   - Toggle whether to provision infra (Terraform)
+#   - Toggle whether to build & deploy (Docker images)
+#
+# REQUIRED SECRETS (set in GitHub → Settings → Secrets):
+#   General:
+#     GEMINI_API_KEY
+#   AWS:
+#     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ACCOUNT_ID
+#   GCP:
+#     GCP_PROJECT_ID, GCP_SA_KEY (base64-encoded service account JSON)
+#   Azure:
+#     AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#     ACR_LOGIN_SERVER, ACR_USERNAME, ACR_PASSWORD
+#   Digital Ocean:
+#     DO_TOKEN, DO_REGISTRY (e.g. registry.digitalocean.com/my-registry)
+##############################################################
+name: 🚀 Multi-Cloud Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud_provider:
+        description: "Target Cloud Provider"
+        required: true
+        type: choice
+        options:
+          - aws
+          - gcp
+          - azure
+          - do
+      run_infra:
+        description: "☁️ Provision Infrastructure (Terraform apply)"
+        required: true
+        type: boolean
+        default: false
+      run_deploy:
+        description: "🐳 Build & Deploy Application (Docker push)"
+        required: true
+        type: boolean
+        default: true
+      terraform_destroy:
+        description: "💀 Destroy Infrastructure (Terraform destroy) — USE WITH CAUTION"
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY_IMAGE_FRONTEND: fincare-frontend
+  REGISTRY_IMAGE_BACKEND: fincare-backend
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ============================================================
+  # Validate inputs
+  # ============================================================
+  validate:
+    name: ✅ Validate Inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check at least one action is selected
+        run: |
+          if [ "${{ inputs.run_infra }}" = "false" ] && [ "${{ inputs.run_deploy }}" = "false" ] && [ "${{ inputs.terraform_destroy }}" = "false" ]; then
+            echo "❌ No action selected. Please enable at least one of: run_infra, run_deploy, or terraform_destroy."
+            exit 1
+          fi
+          echo "✅ Provider: ${{ inputs.cloud_provider }} | Infra: ${{ inputs.run_infra }} | Deploy: ${{ inputs.run_deploy }} | Destroy: ${{ inputs.terraform_destroy }}"
+
+  # ============================================================
+  # JOB 1: Provision Infrastructure (Terraform)
+  # ============================================================
+  infra:
+    name: ☁️ Provision Infrastructure (${{ inputs.cloud_provider }})
+    runs-on: ubuntu-latest
+    needs: validate
+    if: ${{ inputs.run_infra == true || inputs.terraform_destroy == true }}
+    defaults:
+      run:
+        working-directory: terraform/${{ inputs.cloud_provider }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      # --- AWS Authentication ---
+      - name: 🔐 Configure AWS Credentials
+        if: ${{ inputs.cloud_provider == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # --- GCP Authentication ---
+      - name: 🔐 Authenticate to Google Cloud
+        if: ${{ inputs.cloud_provider == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # --- Azure Authentication ---
+      - name: 🔐 Login to Azure
+        if: ${{ inputs.cloud_provider == 'azure' }}
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      # --- Terraform Init (all providers) ---
+      - name: 🚦 Terraform Init
+        run: terraform init
+
+      - name: 🔍 Terraform Plan (Infra)
+        if: ${{ inputs.run_infra == true }}
+        run: |
+          terraform plan -out=tfplan \
+            -var="gemini_api_key=${{ secrets.GEMINI_API_KEY }}" \
+            ${{ inputs.cloud_provider == 'aws' && format('-var="frontend_image={0}.dkr.ecr.us-east-1.amazonaws.com/fincare-frontend:{1}" -var="backend_image={0}.dkr.ecr.us-east-1.amazonaws.com/fincare-backend:{1}"', secrets.AWS_ACCOUNT_ID, env.IMAGE_TAG) || '' }} \
+            ${{ inputs.cloud_provider == 'gcp' && format('-var="gcp_project_id={0}" -var="frontend_image=gcr.io/{0}/fincare-frontend:{1}" -var="backend_image=gcr.io/{0}/fincare-backend:{1}"', secrets.GCP_PROJECT_ID, env.IMAGE_TAG) || '' }} \
+            ${{ inputs.cloud_provider == 'azure' && format('-var="frontend_image={0}/fincare-frontend:{1}" -var="backend_image={0}/fincare-backend:{1}" -var="acr_login_server={0}" -var="acr_username={2}" -var="acr_password={3}"', secrets.ACR_LOGIN_SERVER, env.IMAGE_TAG, secrets.ACR_USERNAME, secrets.ACR_PASSWORD) || '' }} \
+            ${{ inputs.cloud_provider == 'do' && format('-var="do_token={0}" -var="do_registry={1}" -var="frontend_image={2}" -var="backend_image={2}"', secrets.DO_TOKEN, secrets.DO_REGISTRY, env.IMAGE_TAG) || '' }}
+
+      - name: 🏗️ Terraform Apply (Infra)
+        if: ${{ inputs.run_infra == true }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: 💀 Terraform Destroy
+        if: ${{ inputs.terraform_destroy == true }}
+        run: |
+          terraform destroy -auto-approve \
+            -var="gemini_api_key=${{ secrets.GEMINI_API_KEY }}" \
+            ${{ inputs.cloud_provider == 'do' && format('-var="do_token={0}" -var="do_registry={1}" -var="frontend_image=latest" -var="backend_image=latest"', secrets.DO_TOKEN, secrets.DO_REGISTRY) || '' }}
+
+  # ============================================================
+  # JOB 2: Build & Deploy (Docker image push + service restart)
+  # ============================================================
+  deploy:
+    name: 🐳 Build & Deploy (${{ inputs.cloud_provider }})
+    runs-on: ubuntu-latest
+    needs: validate
+    if: ${{ inputs.run_deploy == true }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -------- AWS Deployment --------
+      - name: 🔐 Configure AWS Credentials
+        if: ${{ inputs.cloud_provider == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: 🔐 Login to Amazon ECR
+        if: ${{ inputs.cloud_provider == 'aws' }}
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 🏗️ Build & Push to ECR (AWS)
+        if: ${{ inputs.cloud_provider == 'aws' }}
+        run: |
+          ECR_REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com"
+          # Build and push backend
+          docker build -t $ECR_REGISTRY/fincare-backend:$IMAGE_TAG ./backend
+          docker push $ECR_REGISTRY/fincare-backend:$IMAGE_TAG
+          # Build and push frontend
+          docker build -t $ECR_REGISTRY/fincare-frontend:$IMAGE_TAG ./frontend
+          docker push $ECR_REGISTRY/fincare-frontend:$IMAGE_TAG
+          # Force new ECS deployment
+          aws ecs update-service --cluster fincare-cluster --service fincare-service --force-new-deployment
+
+      # -------- GCP Deployment --------
+      - name: 🔐 Authenticate to Google Cloud
+        if: ${{ inputs.cloud_provider == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ⚙️ Setup gcloud CLI
+        if: ${{ inputs.cloud_provider == 'gcp' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 🏗️ Build & Push to GCR + Redeploy Cloud Run (GCP)
+        if: ${{ inputs.cloud_provider == 'gcp' }}
+        run: |
+          gcloud auth configure-docker --quiet
+          PROJECT="${{ secrets.GCP_PROJECT_ID }}"
+          # Push backend
+          docker build -t gcr.io/$PROJECT/fincare-backend:$IMAGE_TAG ./backend
+          docker push gcr.io/$PROJECT/fincare-backend:$IMAGE_TAG
+          # Push frontend
+          docker build -t gcr.io/$PROJECT/fincare-frontend:$IMAGE_TAG ./frontend
+          docker push gcr.io/$PROJECT/fincare-frontend:$IMAGE_TAG
+          # Update Cloud Run services
+          gcloud run services update fincare-backend --image gcr.io/$PROJECT/fincare-backend:$IMAGE_TAG --region us-central1
+          gcloud run services update fincare-frontend --image gcr.io/$PROJECT/fincare-frontend:$IMAGE_TAG --region us-central1
+
+      # -------- Azure Deployment --------
+      - name: 🔐 Login to Azure
+        if: ${{ inputs.cloud_provider == 'azure' }}
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: 🔐 Login to Azure Container Registry
+        if: ${{ inputs.cloud_provider == 'azure' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: 🏗️ Build & Push to ACR + Update Azure Container Apps
+        if: ${{ inputs.cloud_provider == 'azure' }}
+        run: |
+          ACR="${{ secrets.ACR_LOGIN_SERVER }}"
+          # Build and push
+          docker build -t $ACR/fincare-backend:$IMAGE_TAG ./backend && docker push $ACR/fincare-backend:$IMAGE_TAG
+          docker build -t $ACR/fincare-frontend:$IMAGE_TAG ./frontend && docker push $ACR/fincare-frontend:$IMAGE_TAG
+          # Update Container Apps
+          az containerapp update --name fincare-backend --resource-group fincare-rg --image $ACR/fincare-backend:$IMAGE_TAG
+          az containerapp update --name fincare-frontend --resource-group fincare-rg --image $ACR/fincare-frontend:$IMAGE_TAG
+
+      # -------- Digital Ocean Deployment --------
+      - name: 🔐 Install doctl
+        if: ${{ inputs.cloud_provider == 'do' }}
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_TOKEN }}
+
+      - name: 🔐 Login to DO Container Registry
+        if: ${{ inputs.cloud_provider == 'do' }}
+        run: doctl registry login
+
+      - name: 🏗️ Build & Push to DO Registry + Redeploy App Platform
+        if: ${{ inputs.cloud_provider == 'do' }}
+        run: |
+          REGISTRY="${{ secrets.DO_REGISTRY }}"
+          # Build and push
+          docker build -t $REGISTRY/fincare-backend:$IMAGE_TAG ./backend && docker push $REGISTRY/fincare-backend:$IMAGE_TAG
+          docker build -t $REGISTRY/fincare-frontend:$IMAGE_TAG ./frontend && docker push $REGISTRY/fincare-frontend:$IMAGE_TAG
+          # Force DO App Platform to redeploy
+          APP_ID=$(doctl apps list --format ID --no-header | head -n 1)
+          doctl apps create-deployment $APP_ID
